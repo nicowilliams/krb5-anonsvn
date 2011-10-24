@@ -29,6 +29,7 @@
  * database lookup  (moved from configure script)
  */
 #define AN_TO_LN_RULES
+#define ANAME_DB
 
 #include "k5-int.h"
 #include <ctype.h>
@@ -48,14 +49,6 @@
 #ifndef min
 #define min(a,b)        ((a>b) ? b : a)
 #endif  /* min */
-#ifdef ANAME_DB
-/*
- * Use standard DBM code.
- */
-#define KDBM_OPEN(db, fl, mo)   dbm_open(db, fl, mo)
-#define KDBM_CLOSE(db)          dbm_close(db)
-#define KDBM_FETCH(db, key)     dbm_fetch(db, key)
-#endif /*ANAME_DB*/
 
 /*
  * Find the portion of the flattened principal name that we use for mapping.
@@ -83,12 +76,13 @@ aname_full_to_mapping_name(char *fprincname)
 }
 
 #ifdef ANAME_DB
+
+#include <db.h>
+
 /*
- * Implementation:  This version uses a DBM database, indexed by aname,
- * to generate a lname.
- *
- * The entries in the database are normal C strings, and include the trailing
- * null in the DBM datum.size.
+ * Implementation:  This version uses the same format of BDB that the KDC
+ *                  uses.  The database is a simple hash of Kerberos princs
+ *                  to local names.
  */
 static krb5_error_code
 db_an_to_ln(context, dbname, aname, lnsize, lname)
@@ -99,40 +93,77 @@ db_an_to_ln(context, dbname, aname, lnsize, lname)
     char *lname;
 {
 #if !defined(_WIN32)
-    DBM *db;
+    DB *db;
+    DBT key;
+    DBT val;
     krb5_error_code retval;
-    datum key, contents;
+    int ret;
     char *princ_name;
+    char foldpre[4];
+    char *foldkey;
+    size_t princ_length;
+    size_t i;
+    const krb5_data *crealm;
 
     if ((retval = krb5_unparse_name(context, aname, &princ_name)))
         return(retval);
-    key.dptr = princ_name;
-    key.dsize = strlen(princ_name)+1;   /* need to store the NULL for
-                                           decoding */
 
-    db = KDBM_OPEN(dbname, O_RDONLY, 0600);
+    crealm = krb5_princ_realm(kdc_context, aname);
+
+    db = dbopen(dbname, O_RDONLY, 0, DB_HASH, NULL);
     if (!db) {
         free(princ_name);
         return KRB5_LNAME_CANTOPEN;
     }
 
-    contents = KDBM_FETCH(db, key);
-
-    free(princ_name);
-
-    if (contents.dptr == NULL) {
-        retval = KRB5_LNAME_NOTRANS;
-    } else {
-        strncpy(lname, contents.dptr, lnsize);
-        if (lnsize < contents.dsize)
-            retval = KRB5_CONFIG_NOTENUFSPACE;
-        else if (lname[contents.dsize-1] != '\0')
-            retval = KRB5_LNAME_BADFORMAT;
-        else
-            retval = 0;
+    foldkey = calloc(1, strlen(foldpre) + crealm->length + 1 );
+    if (foldkey == NULL) {
+	krb5_xfree(princ_name);
+	(void) db->close(db);
+	return ENOMEM;
     }
+    strncat(foldkey, foldpre, strlen(foldpre));
+    strncat(foldkey, crealm->data, crealm->length);
+
+    key.data = foldkey;
+    key.size = strlen(foldkey);
+    ret = db->get(db, &key, &val, 0);
+    free(foldkey);
+    princ_length = strlen(princ_name);
+
+    /* if this db lookup fails for some reason, it just means we
+    * didn't fold case, and as such is still a failure but not
+    * a security issue*/
+    if (ret == 0) {
+	for ( i = 0; i < princ_length; i++ ) {
+	    if ( i < (princ_length - crealm->length - 1) ) {
+		princ_name[i] = tolower(princ_name[i]);
+	    }
+	}
+    }
+
+    key.data = princ_name;
+    key.size = strlen(princ_name);
+    ret = db->get(db, &key, &val, 0);
+    krb5_xfree(princ_name);
+
+    retval = KRB5_LNAME_NOTRANS;
+    switch (ret) {
+    case 0:
+	if (val.size < lnsize) {
+	    strncpy(lname, val.data, val.size);
+	    lname[val.size] = '\0';
+            retval = 0;
+	} else {
+	    retval = KRB5_CONFIG_NOTENUFSPACE;
+	}
+	break;
+    default:
+	break;
+    }
+
     /* can't close until we copy the contents. */
-    (void) KDBM_CLOSE(db);
+    (void) db->close(db);
     return retval;
 #else   /* !_WIN32 && !MACINTOSH */
     /*
