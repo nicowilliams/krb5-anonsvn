@@ -276,7 +276,7 @@ krb5_sname_to_principal(krb5_context context,
 			int32_t type,
 			krb5_principal *ret_princ)
 {
-    char *realm, *remote_host;
+    char *remote_host;
     krb5_error_code retval;
     register char *cp;
     char localname[MAXHOSTNAMELEN];
@@ -335,11 +335,10 @@ krb5_sname_to_principal(krb5_context context,
 		*cp = '\0';
     }
 
-    realm = ""; /* "Referral realm" -- borrowed from newer MIT */
-
-    retval = krb5_build_principal(context, ret_princ, strlen(realm),
-				  realm, sname, remote_host,
-				  (char *)0);
+    retval = krb5_build_principal(context, ret_princ,
+				  strlen(KRB5_REFERRAL_REALM),
+				  KRB5_REFERRAL_REALM, sname,
+				  remote_host, (char *)0);
 
     if (type == KRB5_NT_SRV_HST) {
 	/*
