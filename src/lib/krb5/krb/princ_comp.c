@@ -103,6 +103,43 @@ krb5_principal_compare_flags(krb5_context context,
     if (nelem != krb5_princ_size(context, princ2))
         goto out;
 
+    if ((krb5_princ_type(context, princ1) == KRB5_NT_SRV_HST_NEEDS_CANON ||
+	krb5_princ_type(context, princ2) == KRB5_NT_SRV_HST_NEEDS_CANON) &&
+	krb5_princ_type(context, princ1) != krb5_princ_type(context, princ2)) {
+	krb5_error_code retval;
+	krb5_boolean princs_eq;
+	krb5_const_principal princ2canon;
+	krb5_const_principal other_princ;
+	krb5_principal try_princ;
+	krb5_name_canon_iterator nci;
+
+	if (krb5_princ_type(context, princ1) == KRB5_NT_SRV_HST_NEEDS_CANON) {
+	    princ2canon = princ1;
+	    other_princ = princ2;
+	} else {
+	    princ2canon = princ2;
+	    other_princ = princ1;
+	}
+
+	retval = krb5_name_canon_iterator_start(context, princ2canon, NULL,
+						&nci);
+	if (retval)
+	    return FALSE;
+	do {
+	    retval = krb5_name_canon_iterate_princ(context, &nci, &try_princ,
+						   NULL);
+	    if (retval || try_princ == NULL)
+		break;
+	    princs_eq = krb5_principal_compare_flags(context, try_princ,
+						     other_princ, flags);
+	    if (princs_eq) {
+		krb5_free_name_canon_iterator(context, nci);
+		return TRUE;
+	    }
+	} while (nci != NULL);
+	krb5_free_name_canon_iterator(context, nci);
+    }
+
     if ((flags & KRB5_PRINCIPAL_COMPARE_IGNORE_REALM) == 0 &&
         !realm_compare_flags(context, princ1, princ2, flags))
         goto out;
