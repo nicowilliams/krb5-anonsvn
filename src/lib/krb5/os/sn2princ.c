@@ -889,6 +889,8 @@ out:
 	TRACE_NAME_CANON_RULE_NOT_APPLICABLE(context);
     else
 	TRACE_NAME_CANON_RULE_APPLY_ERROR(context, retval);
+    free(sname);
+    free(hostname);
     if (realm != rule->realm)
 	free(realm);
     if (*out_princ)
