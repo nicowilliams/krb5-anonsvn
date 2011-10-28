@@ -57,23 +57,36 @@ krb5_kt_get_entry(krb5_context context, krb5_keytab keytab,
                   krb5_enctype enctype, krb5_keytab_entry *entry)
 {
     krb5_error_code err;
-    krb5_principal_data princ_data;
+    krb5_principal try_princ;
+    krb5_name_canon_iterator name_canon_iter;
 
-    if (krb5_is_referral_realm(&principal->realm)) {
-        char *realm;
-        princ_data = *principal;
-        principal = &princ_data;
-        err = krb5_get_default_realm(context, &realm);
-        if (err)
-            return err;
-        princ_data.realm.data = realm;
-        princ_data.realm.length = strlen(realm);
+    if (!principal ||
+	krb5_princ_type(context, principal) != KRB5_NT_SRV_HST_NEEDS_CANON) {
+	err = krb5_x((keytab)->ops->get,(context, keytab, principal, vno,
+					 enctype, entry));
+	TRACE_KT_GET_ENTRY(context, keytab, principal, vno, enctype, err);
+	return err;
     }
-    err = krb5_x((keytab)->ops->get,(context, keytab, principal, vno, enctype,
-                                     entry));
+
+    err = krb5_name_canon_iterator_start(context, principal, NULL,
+                                         &name_canon_iter);
+    if (err)
+        return err;
+
+    do {
+        err = krb5_name_canon_iterate_princ(context, &name_canon_iter,
+                                            &try_princ, NULL);
+        if (err)
+            break;
+	err = krb5_x((keytab)->ops->get,(context, keytab, principal, vno,
+					 enctype, entry));
+    } while (err == KRB5_KT_NOTFOUND && name_canon_iter);
+
+    if (err != KRB5_KT_NOTFOUND)
+        krb5_set_error_message(context, err,
+                               _("Name canon failed while searching keytab"));
+    krb5_free_name_canon_iterator(context, name_canon_iter);
     TRACE_KT_GET_ENTRY(context, keytab, principal, vno, enctype, err);
-    if (principal == &princ_data)
-        krb5_free_default_realm(context, princ_data.realm.data);
     return err;
 }
 
