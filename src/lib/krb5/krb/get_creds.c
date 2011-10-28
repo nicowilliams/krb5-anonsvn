@@ -151,11 +151,13 @@ struct _krb5_tkt_creds_context {
     krb5_flags req_options;     /* Caller-requested KRB5_GC_* options */
     krb5_flags req_kdcopt;      /* Caller-requested options as KDC options */
     krb5_authdata **authdata;   /* Caller-requested authdata */
+    krb5_name_canon_iterator nc;/* Name canon rules iterator */
 
     /* The following fields are used in multiple steps. */
     krb5_creds *cur_tgt;        /* TGT to be used for next query */
     krb5_data *realms_seen;     /* For loop detection */
     krb5_error_code cache_code; /* KRB5_CC_NOTFOUND or KRB5_CC_NOT_KTYPE */
+    krb5_name_canon_rule_options ncro; /* Current name canon rule options */
 
     /* The following fields track state between request and reply. */
     krb5_principal tgt_princ;   /* Storage for TGT principal */
@@ -503,7 +505,7 @@ try_fallback(krb5_context context, krb5_tkt_creds_context ctx)
     /* Rewrite server->realm to be the fallback realm. */
     krb5_free_data_contents(context, &ctx->server->realm);
     ctx->server->realm = string2data(hrealms[0]);
-    free(hrealms);
+    free(hrealms); /* XXX ew */
     TRACE_TKT_CREDS_FALLBACK(context, &ctx->server->realm);
 
     /* Obtain a TGT for the new service realm. */
@@ -1070,6 +1072,13 @@ krb5_tkt_creds_init(krb5_context context, krb5_ccache ccache,
     code = krb5_copy_authdata(context, in_creds->authdata, &ctx->authdata);
     if (code != 0)
         goto cleanup;
+    if (krb5_princ_type(context, ctx->req_server) ==
+	KRB5_NT_SRV_HST_NEEDS_CANON) {
+	code = krb5_name_canon_iterator_start(context, ctx->req_server,
+					      NULL, &ctx->nc);
+	if (code != 0)
+	    goto cleanup;
+    }
 
     *pctx = ctx;
     ctx = NULL;
@@ -1161,40 +1170,86 @@ krb5_tkt_creds_step(krb5_context context, krb5_tkt_creds_context ctx,
 {
     krb5_error_code code;
     krb5_boolean no_input = (in == NULL || in->length == 0);
+    krb5_boolean needs_canon;
+    krb5_principal try_princ;
+    krb5_principal princ_copy;
 
     *out = empty_data();
     *realm = empty_data();
     *flags = 0;
 
+    needs_canon = krb5_princ_type(context, ctx->req_server) ==
+	KRB5_NT_SRV_HST_NEEDS_CANON;
+
     /* We should receive an empty input on the first step only, and should not
      * get called after completion. */
-    if (no_input != (ctx->state == STATE_BEGIN) ||
-        ctx->state == STATE_COMPLETE)
-        return EINVAL;
+    do {
+	if (no_input != (ctx->state == STATE_BEGIN) ||
+	    ctx->state == STATE_COMPLETE)
+	    return EINVAL;
 
-    ctx->caller_out = out;
-    ctx->caller_realm = realm;
-    ctx->caller_flags = flags;
+	ctx->caller_out = out;
+	ctx->caller_realm = realm;
+	ctx->caller_flags = flags;
 
-    if (!no_input) {
-        /* Convert the input token into a credential and store it in ctx. */
-        code = get_creds_from_tgs_reply(context, ctx, in);
-        if (code != 0)
-            return code;
-    }
+	if (no_input && needs_canon) {
+	    if (ctx->nc == NULL)
+		break;
 
-    if (ctx->state == STATE_BEGIN)
-        return begin(context, ctx);
-    else if (ctx->state == STATE_GET_TGT)
-        return step_get_tgt(context, ctx);
-    else if (ctx->state == STATE_GET_TGT_OFFPATH)
-        return step_get_tgt_offpath(context, ctx);
-    else if (ctx->state == STATE_REFERRALS)
-        return step_referrals(context, ctx);
-    else if (ctx->state == STATE_NON_REFERRAL)
-        return step_non_referral(context, ctx);
-    else
-        return EINVAL;
+	    /* Try next name canon rule */
+	    code = krb5_name_canon_iterate_princ(context, &ctx->nc, &try_princ,
+						 &ctx->ncro);
+	    if (code)
+		return code;
+	    code = krb5_copy_principal(context, ctx->server, &princ_copy);
+	    if (code)
+		return code;
+	    krb5_free_principal(context, ctx->in_creds->server);
+	    ctx->in_creds->server = princ_copy;
+	    ctx->server = ctx->in_creds->server;
+	} else if (!no_input) {
+	    /* Convert the input token into a credential and store it in ctx. */
+	    code = get_creds_from_tgs_reply(context, ctx, in);
+	    if (code != 0)
+		return code;
+	}
+
+	/* XXX Where to check the secure name canon rule option?! */
+	if (ctx->state == STATE_BEGIN)
+	    code = begin(context, ctx);
+	else if (ctx->state == STATE_GET_TGT)
+	    code = step_get_tgt(context, ctx);
+	else if (ctx->state == STATE_GET_TGT_OFFPATH)
+	    code = step_get_tgt_offpath(context, ctx);
+	else if (ctx->state == STATE_REFERRALS)
+	    code = step_referrals(context, ctx);
+	else if (ctx->state == STATE_NON_REFERRAL)
+	    code = step_non_referral(context, ctx);
+	else
+	    return EINVAL;
+
+	if (!needs_canon)
+	    return code;
+	if (*flags & KRB5_TKT_CREDS_STEP_FLAG_CONTINUE)
+	    return code;
+
+	switch (code) {
+	case KRB5_ERR_HOST_REALM_UNKNOWN:
+	case KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN:
+	    if (ctx->ncro & KRB5_NCRO_SECURE)
+		return code;
+	    /* It's as if we're restarting */
+	    ctx->state = STATE_BEGIN;
+	    no_input = TRUE;
+	    in = NULL;
+	    continue;
+	default:
+	    return code;
+	}
+    } while (needs_canon && ctx->nc);
+    
+    /* We've exhausted all name canon rules */
+    return KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN;
 }
 
 krb5_error_code KRB5_CALLCONV
