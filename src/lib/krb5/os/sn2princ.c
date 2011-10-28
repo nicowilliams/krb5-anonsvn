@@ -319,7 +319,7 @@ krb5_sname_to_principal(krb5_context context,
 	    retval = krb5_sname_to_principal_old(context, NULL,
 						 remote_host, sname,
 						 KRB5_NT_SRV_HST,
-						 0, /* XXX */
+						 rules->options & KRB5_NCRO_REVLOOKUP_OK,
 						 ret_princ);
 	    free(remote_host);
 	    free_name_canon_rules(context, rules);
@@ -390,6 +390,8 @@ rule_parse_token(krb5_context context, krb5_name_canon_rule rule,
 	rule->options |= KRB5_NCRO_SECURE;
     } else if (strcmp(tok, "ccache_only") == 0) {
 	rule->options |= KRB5_NCRO_GC_ONLY;
+    } else if (strcmp(tok, "revlookup_ok") == 0) {
+	rule->options |= KRB5_NCRO_REVLOOKUP_OK;
     } else if (strcmp(tok, "no_referrals") == 0) {
 	rule->options |= KRB5_NCRO_NO_REFERRALS;
 	rule->options &= ~KRB5_NCRO_USE_REFERRALS;
@@ -861,7 +863,7 @@ apply_name_canon_rule(krb5_context context, krb5_name_canon_rule rule,
 	retval = krb5_sname_to_principal_old(context, rule->realm,
 					     hostname, sname,
 					     KRB5_NT_SRV_HST,
-					     0, /* XXX */
+					     rule->options & KRB5_NCRO_REVLOOKUP_OK,
 					     out_princ);
 	if (rule->next != NULL &&
 	    (retval == KRB5_ERR_BAD_HOSTNAME ||
