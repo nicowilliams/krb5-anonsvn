@@ -266,6 +266,8 @@ typedef krb5_principal_data * krb5_principal;
 #define KRB5_NT_MS_PRINCIPAL_AND_ID     -129
 /* NT 4 style name and SID */
 #define KRB5_NT_ENT_PRINCIPAL_AND_ID    -130
+/* KRB5_NT_SRV_XHST w/ deferred hostname canonicalization */
+#define KRB5_NT_SRV_HST_NEEDS_CANON     -1202
 
 /** Constant version of krb5_principal_data */
 typedef const krb5_principal_data *krb5_const_principal;
@@ -2126,6 +2128,17 @@ typedef struct _krb5_cred {
     krb5_enc_data enc_part;         /**< Encrypted part */
     krb5_cred_enc_part *enc_part2;  /**< Unencrypted version, if available */
 } krb5_cred;
+
+/* Host-based principal name canonicalization rule types */
+typedef enum krb5_name_canon_rule_options {
+	KRB5_NCRO_GC_ONLY = 1 << 0,
+	KRB5_NCRO_USE_REFERRALS = 1 << 1,
+	KRB5_NCRO_NO_REFERRALS = 1 << 2,
+	KRB5_NCRO_SECURE = 1 << 2
+} krb5_name_canon_rule_options;
+
+typedef struct krb5_name_canon_rule *krb5_name_canon_rule;
+typedef struct krb5_name_canon_iterator *krb5_name_canon_iterator;
 
 /*
  * Sandia password generation structure
@@ -4839,6 +4852,32 @@ krb5_free_default_realm(krb5_context context, char *lrealm);
 krb5_error_code KRB5_CALLCONV
 krb5_sname_to_principal(krb5_context context, const char *hostname, const char *sname,
                         krb5_int32 type, krb5_principal *ret_princ);
+
+KRB5_LIB_FUNCTION krb5_error_code KRB5_LIB_CALL
+krb5_name_canon_iterate_creds (
+        krb5_context context,
+        krb5_name_canon_iterator *iter,
+        krb5_creds **try_creds,
+        krb5_name_canon_rule_options *rule_opts);
+
+KRB5_LIB_FUNCTION krb5_error_code KRB5_LIB_CALL
+krb5_name_canon_iterate_princ (
+        krb5_context context,
+        krb5_name_canon_iterator *iter,
+        krb5_principal *try_princ,
+        krb5_name_canon_rule_options *rule_opts);
+
+KRB5_LIB_FUNCTION krb5_error_code KRB5_LIB_CALL
+krb5_name_canon_iterator_start (
+        krb5_context context,
+        krb5_const_principal in_princ,
+        krb5_creds *in_creds,
+        krb5_name_canon_iterator *iter);
+
+KRB5_LIB_FUNCTION void KRB5_LIB_CALL
+krb5_free_name_canon_iterator (
+        krb5_context context,
+        krb5_name_canon_iterator iter);
 
 /**
  * Test whether a principal matches a matching principal.

@@ -146,3 +146,10 @@ krb5_clear_error_message (krb5_context ctx)
         return;
     krb5int_clear_error (&ctx->err);
 }
+
+krb5_error_code KRB5_CALLCONV
+krb5_enomem(krb5_context context)
+{
+    krb5_set_error_message(context, ENOMEM, _("malloc: out of memory"));
+    return ENOMEM;
+}

@@ -2826,6 +2826,8 @@ krb5_set_error_message_fl(krb5_context ctx, krb5_error_code code,
 #endif
     ;
 
+krb5_error_code KRB5_CALLCONV krb5_enomem(krb5_context context);
+
 #ifndef DISABLE_TRACING
 /* Do not use these functions directly; see k5-trace.h. */
 void krb5int_init_trace(krb5_context context);

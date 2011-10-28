@@ -141,6 +141,35 @@
     TRACE(c, (c, "ccselect choosing default cache {ccache} for server " \
               "principal {princ}", cache, server))
 
+#define TRACE_NAME_CANON_RULE_ERROR(c, code)                            \
+    TRACE(c, (c, "Unable to load name canonicalization rules: {kerr}",  \
+              code))
+#define TRACE_NAME_CANON_RULE_WILL_USE_NSS(c)                           \
+    TRACE(c, (c, "Default name canonicalization rules in effect "       \
+	      "(use DNS)"))
+#define TRACE_NAME_CANON_RULE_ALL_INVALID(c)                            \
+    TRACE(c, (c, "All configured name canonicalization rules are "      \
+	      "invalid"))
+#define TRACE_SN2P_DELAYED_CANON(c, sname, hname)                       \
+    TRACE(c, (c, "Deferring name canonicalization for {str}/{str}",     \
+	      sname, hname))
+#define TRACE_NAME_CANON_RULE(c, i, t, o, m, d, r)                      \
+    TRACE(c, (c, "Adding name canon rule # {long} from krb5 config "    \
+	      "of type \"{str}\", options={int}, mindots={int}, "       \
+	      "domain={str}, realm={str}", i, t, o, m, d, r))
+#define TRACE_NAME_CANON_RULE_SEARCHLIST_INS(c, domain)                 \
+    TRACE(c, (c, "Inserting qualify rule from resolver search list "    \
+	      "{str}", domain))
+#define TRACE_NAME_CANON_RULE_APPLY(c, rule_type, hname)                \
+    TRACE(c, (c, "Applying a name canon rule of type \"{str}\" to "     \
+	      "{str}", rule_type, hname))
+#define TRACE_NAME_CANON_RULE_APPLY_RESULT(c, princ)                    \
+    TRACE(c, (c, "Name canon rule yields {princ}", princ))
+#define TRACE_NAME_CANON_RULE_NOT_APPLICABLE(c)                         \
+    TRACE(c, (c, "Name canon rule not applicable"))
+#define TRACE_NAME_CANON_RULE_APPLY_ERROR(c, code)                      \
+    TRACE(c, (c, "Name canon rule application error: {kerr}", code))
+
 #define TRACE_FAST_ARMOR_CCACHE(c, ccache_name)                 \
     TRACE(c, (c, "FAST armor ccache: {str}", ccache_name))
 #define TRACE_FAST_ARMOR_CCACHE_KEY(c, keyblock)                        \
