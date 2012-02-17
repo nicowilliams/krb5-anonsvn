@@ -29,7 +29,7 @@
  * database lookup  (moved from configure script)
  */
 #define AN_TO_LN_RULES
-#define ANAME_DB
+#undef ANAME_DB
 
 #include "k5-int.h"
 #include <ctype.h>
