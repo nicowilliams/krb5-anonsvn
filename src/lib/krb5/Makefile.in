@@ -23,15 +23,8 @@ LIBMINOR=3
 LIBINITFUNC=profile_library_initializer krb5int_lib_init
 LIBFINIFUNC=profile_library_finalizer krb5int_lib_fini
 
-DBDIR = $(BUILDTOP)/plugins/kdb/db2/libdb2
-DBOBJLISTS = $(DBOBJLISTS-@DB_VERSION@)
-DBOBJLISTS-sys =
-DBOBJLISTS-k5 = $(DBDIR)/hash/OBJS.ST $(DBDIR)/btree/OBJS.ST \
-	$(DBDIR)/db/OBJS.ST $(DBDIR)/mpool/OBJS.ST $(DBDIR)/recno/OBJS.ST
-
 STOBJLISTS= \
 	OBJS.ST \
-	$(DBOBJLISTS) \
 	error_tables/OBJS.ST \
 	asn.1/OBJS.ST \
 	ccache/OBJS.ST \
