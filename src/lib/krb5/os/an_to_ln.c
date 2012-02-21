@@ -31,6 +31,8 @@
 #define AN_TO_LN_RULES
 
 #include "k5-int.h"
+#include "kdb.h"
+#include "kdb5int.h"
 #include <ctype.h>
 #if     HAVE_REGEX_H
 #include <regex.h>
@@ -571,24 +573,48 @@ default_an_to_ln(krb5_context context, krb5_const_principal aname, const unsigne
     return retval;
 }
 
-#if 0
-#ifdef ANAME_DB
-MAKE_INIT_FUNCTION(aname_to_localname_db_init);
-MAKE_FINI_FUNCTION(aname_to_localname_db_fini);
+#ifdef USE_DLOPEN
+#include <dlfcn.h>
+#endif
+
+static krb5_error_code (*kdb_setup_handle_func)(krb5_context) = NULL;
+static void *kdb_dlhandle = NULL;
+
+MAKE_INIT_FUNCTION(aname2lname_db_init);
+MAKE_FINI_FUNCTION(aname2lname_db_fini);
 
 static
 int
-aname_to_localname_db_init(void)
+aname2lname_db_init(void)
 {
+#if USE_DLOPEN
+    void *dlhandle;
+
+#ifdef RTLD_GROUP
+#define KDB_DLOPEN_FLAGS (RTLD_LOCAL | RTLD_GROUP)
+#else
+#ifdef RTLD_DEEPBIND
+#define KDB_DLOPEN_FLAGS (RTLD_LOCAL | RTLD_DEEPBIND)
+#else
+#define KDB_DLOPEN_FLAGS (RTLD_LOCAL)
+#endif 
+#endif 
+
+    dlhandle = dlopen("../../libkdb.so", KDB_DLOPEN_FLAGS);
+    if (dlhandle == NULL)
+        return 0;
+    kdb_setup_handle_func = dlsym(dlhandle, "krb5_db_setup_lib_handle");
+#endif
+    return 0;
 }
 
 static
 void
-aname_to_localname_db_fini(void)
+aname2lname_db_fini(void)
 {
+    if (kdb_dlhandle)
+        (void) dlclose(kdb_dlhandle);
 }
-#endif /* ANAME_DB */
-#endif
 
 
 /*
@@ -616,13 +642,11 @@ krb5_aname_to_localname(krb5_context context, krb5_const_principal aname, int ln
     char                *cp, *s;
     char                *typep, *argp;
     unsigned int        lnsize;
-#ifdef ANAME_DB
-    int                 an_to_ln_db_err;
-#endif
+    int                 an_to_ln_db_err = ENOENT;
 
-#ifdef ANAME_DB
-    an_to_ln_db_err = krb5_db_setup_lib_handle(context);
-#endif
+    kret = CALL_INIT_FUNCTION(aname2lname_db_init);
+    if (kdb_setup_handle_func)
+        an_to_ln_db_err = kdb_setup_handle_func(context);
 
     if (lnsize_in < 0)
         return KRB5_CONFIG_NOTENUFSPACE;
@@ -702,16 +726,14 @@ krb5_aname_to_localname(krb5_context context, krb5_const_principal aname, int ln
                                 *argp = '\0';
                                 argp++;
                             }
-#ifdef ANAME_DB
                             if (!strcmp(typep, "DB") && argp) {
                                 kdb_vftabl *v;
 
-                                if (an_to_ln_db_err) {
+                                v = &context->dal_handle->lib_handle->vftabl;
+                                if (an_to_ln_db_err || !v) {
                                     kret = KRB5_LNAME_CANTOPEN;
                                     break;
                                 }
-
-                                v = &context->dal_handle->lib_handle->vftabl;
                                 kret = v->aname_to_localname(context,
                                                              argp,
                                                              aname,
@@ -721,7 +743,6 @@ krb5_aname_to_localname(krb5_context context, krb5_const_principal aname, int ln
                                     break;
                             }
                             else
-#endif
 #ifdef  AN_TO_LN_RULES
                                 if (!strcmp(typep, "RULE") && argp) {
                                     kret = rule_an_to_ln(context,
