@@ -29,7 +29,7 @@
  * database lookup  (moved from configure script)
  */
 #define AN_TO_LN_RULES
-#undef ANAME_DB
+#undef ANAME_DB /* see comment below */
 
 #include "k5-int.h"
 #include <ctype.h>
@@ -77,6 +77,19 @@ aname_full_to_mapping_name(char *fprincname)
 
 #ifdef ANAME_DB
 
+/*
+ * XXX This doesn't build because the kdb/db2 bits are now built *after*
+ * lib.  If we had a make headers target then we could access the
+ * kdb/db2 plugin here via the plugin interface, but we can't because
+ * that target doesn't exist (and no, install-headers isn't it).
+ *
+ * It will take a significant bit of build surgery to make this build.
+ * One possibility would be to first make, then make
+ * CPPFLAGS=-DANAME_DB, because the second make would be incremental.
+ *
+ * Instead let's use CDB.
+ */
+
 #include <db.h>
 
 /*
@@ -85,12 +98,8 @@ aname_full_to_mapping_name(char *fprincname)
  *                  to local names.
  */
 static krb5_error_code
-db_an_to_ln(context, dbname, aname, lnsize, lname)
-    krb5_context context;
-    char *dbname;
-    krb5_const_principal aname;
-    const unsigned int lnsize;
-    char *lname;
+db_an_to_ln(krb5_context context, char *dbname, krb5_const_principal aname,
+	    const unsigned int lnsize, char *lname)
 {
 #if !defined(_WIN32)
     DB *db;
@@ -174,6 +183,117 @@ db_an_to_ln(context, dbname, aname, lnsize, lname)
 #endif  /* !_WIN32 && !MACINTOSH */
 }
 #endif /*ANAME_DB*/
+
+#ifdef ANAME_CDB
+
+#include <cdb.h>
+
+static krb5_error_code
+cdb_an_to_ln(krb5_context context, char *dbname, krb5_const_principal aname,
+	     const unsigned int lnsize, char *lname)
+{
+#if !defined(_WIN32)
+    struct cdb cdb;
+    char *key;
+    char *val;
+    unsigned int keylen;
+    unsigned int vallen;
+    krb5_error_code retval;
+    int fd;
+    int ret;
+    char *princ_name;
+    char foldpre[4];
+    char *foldkey;
+    size_t princ_length;
+    size_t i;
+    const krb5_data *crealm;
+
+    if (lnsize == 0)
+	return KRB5_LNAME_NOTRANS;
+    lname[0] = '\0';
+    if ((retval = krb5_unparse_name(context, aname, &princ_name)))
+        return(retval);
+    princ_length = strlen(princ_name);
+
+    crealm = krb5_princ_realm(kdc_context, aname);
+
+    fd = open(dbname, O_RDONLY);
+    if (fd == -1) {
+        free(princ_name);
+        return KRB5_LNAME_CANTOPEN;
+    }
+    ret = cdb_init(&cdb, fd);
+    if (ret < 0) {
+        free(princ_name);
+	(void) close(fd);
+        return KRB5_LNAME_CANTOPEN;
+    }
+
+    foldkey = calloc(1, strlen(foldpre) + crealm->length + 1 );
+    if (foldkey == NULL) {
+	krb5_xfree(princ_name);
+	cdb_free(&cdb);
+	(void) close(fd);
+	return ENOMEM;
+    }
+    strncat(foldkey, foldpre, strlen(foldpre));
+    strncat(foldkey, crealm->data, crealm->length);
+
+    ret = cdb_find(&cdb, foldkey, strlen(foldkey));
+    free(foldkey);
+    if (ret < 0) {
+	krb5_xfree(princ_name);
+	cdb_free(&cdb);
+	(void) close(fd);
+        return KRB5_LNAME_BADFORMAT; /* XXX need a better error */
+    }
+
+    /* If found foldkey then we need to fold the case of the princ */
+    for (i = (ret == 1) ? 0 : princ_length;
+	 i < (princ_length - crealm->length - 1);
+	 i++) {
+	princ_name[i] = tolower(princ_name[i]);
+    }
+
+    ret = cdb_find(&cdb, princ_name, strlen(princ_name));
+    krb5_xfree(princ_name);
+    if (ret < 1) {
+	cdb_free(&cdb);
+	(void) close(fd);
+	if (ret == 0)
+	    return KRB5_LNAME_NOTRANS;
+	return KRB5_LNAME_BADFORMAT; /* XXX need a better error */
+    }
+
+    /* Found an entry */
+    vallen = cdb_datalen(&cdb);
+    if (vallen >= lnsize) {
+	cdb_free(&cdb);
+	(void) close(fd);
+	return KRB5_CONFIG_NOTENUFSPACE;
+    }
+
+    /* Read the entry straight into lname[] */
+    ret = cdb_read(&cdb, lname, vallen, cdb_datapos(&cdb));
+    lname[vallen] = '\0';
+    if (ret < 0) {
+	lname[0] = '\0';
+	free(val);
+	cdb_free(&cdb);
+	(void) close(fd);
+	return KRB5_LNAME_BADFORMAT; /* XXX need a better error */
+    }
+    return 0;
+
+#else   /* !_WIN32 && !MACINTOSH */
+    /*
+     * If we don't have support for a database mechanism, then we can't
+     * translate this now, can we?
+     */
+    return KRB5_LNAME_NOTRANS;
+#endif  /* !_WIN32 && !MACINTOSH */
+}
+#endif /*ANAME_CDB*/
 
 #ifdef  AN_TO_LN_RULES
 /*
@@ -783,6 +903,18 @@ krb5_aname_to_localname(krb5_context context, krb5_const_principal aname, int ln
                                                    aname,
                                                    lnsize,
                                                    lname);
+                                if (kret != KRB5_LNAME_NOTRANS)
+                                    break;
+                            }
+                            else
+#endif
+#ifdef ANAME_CDB
+                            if (!strcmp(typep, "DB") && argp) {
+                                kret = cdb_an_to_ln(context,
+                                                    argp,
+                                                    aname,
+                                                    lnsize,
+                                                    lname);
                                 if (kret != KRB5_LNAME_NOTRANS)
                                     break;
                             }
