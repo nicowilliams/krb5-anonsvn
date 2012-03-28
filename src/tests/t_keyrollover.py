@@ -17,6 +17,9 @@ realm.run_as_client([kvno, realm.host_princ])
 realm.run_kadminl('cpw -randkey -e aes256-cts:normal -keepold krbtgt/%s@%s' %
                   (realm.realm, realm.realm))
 
+# Set kvno of tickets to 0
+#realm.run_as_client(['/home/nico/ws/heimdal3/build/lib/krb5/test_set_kvno0'])
+
 # Ensure that kvno still works with an old TGT.
 realm.run_as_client([kvno, princ1])
 
