@@ -253,7 +253,7 @@ kdc_process_tgs_req(krb5_kdc_req *request, const krb5_fulladdr *from,
                                          from->address)) )
         goto cleanup_auth_context;
 
-    if ((retval = kdc_get_server_key(apreq->ticket, 0, foreign_server,
+    if ((retval = kdc_get_server_key(apreq->ticket, 0, 1,
                                      &krbtgt, tgskey, &kvno)))
         goto cleanup_auth_context;
     /*

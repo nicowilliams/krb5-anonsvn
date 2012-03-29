@@ -293,10 +293,14 @@ rd_req_decoded_opt(krb5_context context, krb5_auth_context *auth_context,
 
     /* decrypt the ticket */
     if ((*auth_context)->key) { /* User to User authentication */
-        if ((retval = krb5_decrypt_tkt_part(context,
-                                            &(*auth_context)->key->keyblock,
-                                            req->ticket)))
-            goto cleanup;
+        retval = krb5_decrypt_tkt_part(context,
+                                       &(*auth_context)->key->keyblock,
+                                       req->ticket);
+        if (retval) {
+            retval = decrypt_ticket(context, req, server, keytab, NULL);
+            if (retval)
+                goto cleanup;
+        }
         if (check_valid_flag) {
             decrypt_key = (*auth_context)->key->keyblock;
             (*auth_context)->key->keyblock.contents = NULL;

@@ -159,7 +159,7 @@ krb5_ktkdb_get_entry(in_context, id, principal, kvno, enctype, entry)
      * found.  Since the TGS and AS code do the same thing, then we
      * will only successfully decrypt  tickets we have issued.*/
     kerror = krb5_dbe_find_enctype(context, db_entry,
-                                   xrealm_tgt?enctype:-1,
+                                   enctype ? enctype : -1,
                                    -1, kvno, &key_data);
     if (kerror == KRB5_KDB_NO_MATCHING_KEY)
         kerror = KRB5_KT_KVNONOTFOUND;
