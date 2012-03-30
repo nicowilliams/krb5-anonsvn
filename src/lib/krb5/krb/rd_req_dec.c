@@ -138,46 +138,20 @@ try_one_princ(krb5_context context, const krb5_ap_req *req,
 {
     krb5_error_code ret;
     krb5_keytab_entry ent;
-    krb5_kvno try_kvno = req->ticket->enc_part.kvno;
-    size_t max_tries = 1;
 
-    /*
-     * If the ticket encpart kvno is 0 then we probably have AD and we need to
-     * try multiple kvnos for cross-realm key rollover purposes.  But we don't
-     * want to do this unless we're in the KDC, as we may already be looping
-     * over keytab entries otherwise.  Of course, how to know if we're in the
-     * KDC here?  We could look at keytab->ops->prefix: if it's "KDB:" we're on
-     * a KDC, though not necessarily the KDC process.  But we really only want
-     * to do this for krbtgts, so we'll just inspect princ.
-     *
-     * We should probably make krb5_is_tgs_principal() a library function...
-     */
-    if (req->ticket->enc_part.kvno == 0 &&
-        (krb5_princ_size(context, princ) > 0) &&
-        data_eq_string(*krb5_princ_component(context, princ, 0),
-                       KRB5_TGS_NAME))
-        max_tries = 4;
+    ret = krb5_kt_get_entry(context, keytab, princ,
+                            req->ticket->enc_part.kvno,
+                            req->ticket->enc_part.enctype, &ent);
+    if (ret)
+        return ret;
+    ret = try_one_entry(context, req, &ent, keyblock_out);
+    if (ret == 0)
+        TRACE_RD_REQ_DECRYPT_SPECIFIC(context, ent.principal, &ent.key);
+    (void)krb5_free_keytab_entry_contents(context, &ent);
+    if (ret)
+        return ret;
 
-    do {
-        ret = krb5_kt_get_entry(context, keytab, princ, try_kvno,
-                                req->ticket->enc_part.enctype, &ent);
-        if (ret) {
-            if (try_kvno == 0)
-                return ret; /* No keytab entry for any kvno */
-            try_kvno--;
-            continue;
-        }
-
-        try_kvno = ent.vno - 1;
-        ret = try_one_entry(context, req, &ent, keyblock_out);
-        (void) krb5_free_keytab_entry_contents(context, &ent);
-        if (ret == 0) {
-            TRACE_RD_REQ_DECRYPT_SPECIFIC(context, ent.principal, &ent.key);
-            break;
-        }
-    } while (ret && try_kvno > 0 && --max_tries > 0);
-
-    return ret;
+    return 0;
 }
 
 /*
@@ -293,14 +267,10 @@ rd_req_decoded_opt(krb5_context context, krb5_auth_context *auth_context,
 
     /* decrypt the ticket */
     if ((*auth_context)->key) { /* User to User authentication */
-        retval = krb5_decrypt_tkt_part(context,
-                                       &(*auth_context)->key->keyblock,
-                                       req->ticket);
-        if (retval) {
-            retval = decrypt_ticket(context, req, server, keytab, NULL);
-            if (retval)
-                goto cleanup;
-        }
+        if ((retval = krb5_decrypt_tkt_part(context,
+                                            &(*auth_context)->key->keyblock,
+                                            req->ticket)))
+            goto cleanup;
         if (check_valid_flag) {
             decrypt_key = (*auth_context)->key->keyblock;
             (*auth_context)->key->keyblock.contents = NULL;
