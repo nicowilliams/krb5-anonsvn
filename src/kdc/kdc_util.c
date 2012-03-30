@@ -68,6 +68,10 @@ const int vague_errors = 1;
 const int vague_errors = 0;
 #endif
 
+static krb5_error_code kdc_find_server_key(krb5_db_entry *, krb5_enctype,
+                                           krb5_kvno, krb5_keyblock **,
+                                           krb5_kvno *);
+
 /*
  * concatenate first two authdata arrays, returning an allocated replacement.
  * The replacement should be freed with krb5_free_authdata().
@@ -253,20 +257,42 @@ kdc_process_tgs_req(krb5_kdc_req *request, const krb5_fulladdr *from,
                                          from->address)) )
         goto cleanup_auth_context;
 
-    if ((retval = kdc_get_server_key(apreq->ticket, 0, 1,
-                                     &krbtgt, tgskey, &kvno)))
-        goto cleanup_auth_context;
-    /*
-     * We do not use the KDB keytab because other parts of the TGS need the TGT key.
-     */
-    retval = krb5_auth_con_setuseruserkey(kdc_context, auth_context, *tgskey);
+    retval = kdc_get_server_key(apreq->ticket, 0, 1,
+                                     &krbtgt, tgskey, &kvno);
     if (retval)
         goto cleanup_auth_context;
 
-    if ((retval = krb5_rd_req_decoded_anyflag(kdc_context, &auth_context, apreq,
-                                              apreq->ticket->server,
-                                              kdc_active_realm->realm_keytab,
-                                              NULL, ticket)))
+    /* XXX Should this be an assert()?  Probably.  -Nico */
+    if (kvno < 1) {
+        retval = KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN;
+        goto cleanup_auth_context;
+    }
+
+    if (apreq->ticket->enc_part.kvno > 0)
+        kvno = apreq->ticket->enc_part.kvno;
+
+    /*
+     * We do not use the KDB keytab because other parts of the TGS need the TGT
+     * key.
+     */
+    do {
+        assert(kvno > 0);
+        retval = kdc_find_server_key(krbtgt, apreq->ticket->enc_part.enctype,
+                                     kvno, tgskey, NULL);
+        if (retval)
+            continue;
+        retval = krb5_auth_con_setuseruserkey(kdc_context, auth_context,
+                                              *tgskey);
+        if (retval)
+            goto cleanup_auth_context;
+
+        if ((retval = krb5_rd_req_decoded_anyflag(kdc_context, &auth_context,
+                                                  apreq, apreq->ticket->server,
+                                                  kdc_active_realm->realm_keytab,
+                                                  NULL, ticket)))
+            continue;
+    } while (retval && kvno != apreq->ticket->enc_part.kvno && kvno-- > 1);
+    if (retval)
         goto cleanup_auth_context;
 
     /* "invalid flag" tickets can must be used to validate */
@@ -356,12 +382,13 @@ cleanup:
     return retval;
 }
 
-/* XXX This function should no longer be necessary.
- * The KDC should take the keytab associated with the realm and pass that to
- * the krb5_rd_req_decode(). --proven
+/* 
+ * The KDC should take the keytab associated with the realm and pass
+ * that to the krb5_rd_req_decoded_anyflag(), but we still need to use
+ * the service (TGS, here) key elsewhere.  This approach is faster than
+ * the KDB keytab approach too.
  *
- * It's actually still used by do_tgs_req() for u2u auth, and not too
- * much else. -- tlyu
+ * This is also used by do_tgs_req() for u2u auth.
  */
 krb5_error_code
 kdc_get_server_key(krb5_ticket *ticket, unsigned int flags,
@@ -369,9 +396,14 @@ kdc_get_server_key(krb5_ticket *ticket, unsigned int flags,
                    krb5_keyblock **key, krb5_kvno *kvno)
 {
     krb5_error_code       retval;
-    krb5_boolean          similar;
-    krb5_key_data       * server_key;
     krb5_db_entry       * server = NULL;
+    krb5_enctype          search_enctype = -1;
+    krb5_kvno             search_kvno = -1;
+
+    if (match_enctype)
+        search_enctype = ticket->enc_part.enctype;
+    if (ticket->enc_part.kvno)
+        search_kvno = ticket->enc_part.kvno;
 
     *server_ptr = NULL;
 
@@ -386,43 +418,71 @@ kdc_get_server_key(krb5_ticket *ticket, unsigned int flags,
             free(sname);
         }
         return KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN;
-    } else if (retval)
+    } else if (retval) {
         return retval;
+    }
     if (server->attributes & KRB5_KDB_DISALLOW_SVR ||
         server->attributes & KRB5_KDB_DISALLOW_ALL_TIX) {
         retval = KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN;
         goto errout;
     }
 
-    retval = krb5_dbe_find_enctype(kdc_context, server,
-                                   match_enctype ? ticket->enc_part.enctype : -1,
-                                   -1, (krb5_int32)ticket->enc_part.kvno,
+    if (key) {
+        retval = kdc_find_server_key(server, search_enctype, search_kvno, key, kvno);
+        if (retval)
+            goto errout;
+    }
+    *server_ptr = server;
+    server = NULL;
+    return 0;
+
+errout:
+    krb5_db_free_principal(kdc_context, server);
+    return retval;
+}
+
+/*
+ * A utility function to get the right key from a KDB entry.  Used in handling
+ * of kvno 0 TGTs, for example.
+ */
+static
+krb5_error_code
+kdc_find_server_key(krb5_db_entry *server, krb5_enctype enctype,
+                    krb5_kvno kvno, krb5_keyblock **key, krb5_kvno *kvno_out)
+{
+    krb5_error_code       retval;
+    krb5_boolean          similar;
+    krb5_key_data       * server_key;
+
+    *key = NULL;
+    retval = krb5_dbe_find_enctype(kdc_context, server, enctype, -1, kvno,
                                    &server_key);
     if (retval)
+        return retval;
+    if (!server_key)
+        return KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN;
+    if ((*key = (krb5_keyblock *)malloc(sizeof **key)) == NULL)
+        return ENOMEM;
+    retval = krb5_dbe_decrypt_key_data(kdc_context, NULL, server_key,
+                                       *key, NULL);
+    if (retval)
         goto errout;
-    if (!server_key) {
-        retval = KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN;
-        goto errout;
-    }
-    if ((*key = (krb5_keyblock *)malloc(sizeof **key))) {
-        retval = krb5_dbe_decrypt_key_data(kdc_context, NULL, server_key,
-                                           *key, NULL);
-    } else
-        retval = ENOMEM;
-    retval = krb5_c_enctype_compare(kdc_context, ticket->enc_part.enctype,
-                                    (*key)->enctype, &similar);
+    retval = krb5_c_enctype_compare(kdc_context, enctype, (*key)->enctype,
+                                    &similar);
     if (retval)
         goto errout;
     if (!similar) {
         retval = KRB5_KDB_NO_PERMITTED_KEY;
         goto errout;
     }
-    (*key)->enctype = ticket->enc_part.enctype;
-    *kvno = server_key->key_data_kvno;
-    *server_ptr = server;
-    server = NULL;
+    (*key)->enctype = enctype;
+    if (kvno_out)
+        *kvno_out = server_key->key_data_kvno;
 errout:
-    krb5_db_free_principal(kdc_context, server);
+    if (retval) {
+        krb5_free_keyblock(kdc_context, *key);
+        *key = NULL;
+    }
     return retval;
 }
 
