@@ -64,6 +64,15 @@ krb5_dbe_def_search_enctype(kcontext, dbentp, start, ktype, stype, kvno, kdatap)
     if (kvno == -1 && stype == -1 && ktype == -1)
         kvno = 0;
 
+    if (kvno == 0) {
+        /* Get the max key version */
+        for (i = 0; i < dbentp->n_key_data; i++) {
+            if (kvno < dbentp->key_data[i].key_data_kvno) {
+                kvno = dbentp->key_data[i].key_data_kvno;
+            }
+        }
+    }
+
     maxkvno = -1;
     idx = -1;
     datap = (krb5_key_data *) NULL;
@@ -88,7 +97,7 @@ krb5_dbe_def_search_enctype(kcontext, dbentp, start, ktype, stype, kvno, kdatap)
         }
         if (stype >= 0 && db_stype != stype)
             continue;
-        if (kvno > 0 && dbentp->key_data[i].key_data_kvno != kvno)
+        if (kvno >= 0 && dbentp->key_data[i].key_data_kvno != kvno)
             continue;
 
         /* Filter out non-permitted enctypes. */
