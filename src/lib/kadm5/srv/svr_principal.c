@@ -1426,8 +1426,7 @@ kadm5_chpass_principal_3(void *server_handle,
 #endif
 
         ret = check_pw_reuse(handle->context, &hist_keyblock,
-                             kdb->n_key_data, kdb->key_data,
-                             1, &hist);
+                             1, kdb->key_data, 1, &hist);
         if (ret)
             goto done;
 
@@ -1436,8 +1435,8 @@ kadm5_chpass_principal_3(void *server_handle,
              * can't check the history. */
             if (adb.admin_history_kvno == hist_kvno) {
                 ret = check_pw_reuse(handle->context, &hist_keyblock,
-                                     kdb->n_key_data, kdb->key_data,
-                                     adb.old_key_len, adb.old_keys);
+                                     1, kdb->key_data, adb.old_key_len,
+                                     adb.old_keys);
                 if (ret)
                     goto done;
             }
