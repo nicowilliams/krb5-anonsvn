@@ -969,12 +969,10 @@ check_pw_reuse(krb5_context context,
     unsigned int x, y, z;
     krb5_keyblock newkey, histkey;
     krb5_error_code ret;
-    krb5_kvno kvno;
 
     assert (n_new_key_data >= 0);
-    kvno = new_key_data[0].key_data_kvno;
     for (x = 0; x < (unsigned) n_new_key_data; x++) {
-        if (new_key_data[x].key_data_kvno != kvno)
+        if (new_key_data[x].key_data_kvno != new_key_data[0].key_data_kvno)
             break;
         ret = krb5_dbe_decrypt_key_data(context, NULL, &(new_key_data[x]),
                                         &newkey, NULL);
